@@ -4,25 +4,31 @@ from datetime import datetime
 import json
 from typing import List, Dict, Optional, Tuple
 import logging
+from requests.auth import HTTPBasicAuth
+import urllib3
+
+# Disable SSL warnings when verify=False
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class JiraReleaseFetcher:
-    def __init__(self, jira_url: str, username: str, api_token: str):
+    def __init__(self, jira_url: str, username: str, password: str):
         """
-        Initialize Jira API connection
+        Initialize Jira API connection with basic authentication
         
         Args:
             jira_url: Base URL of your Jira instance (e.g., 'https://your-domain.atlassian.net')
-            username: Your Jira username/email
-            api_token: Your Jira API token
+            username: Your Jira username
+            password: Your Jira password
         """
         self.jira_url = jira_url.rstrip('/')
-        self.auth = (username, api_token)
+        self.auth = HTTPBasicAuth(username, password)
         self.session = requests.Session()
         self.session.auth = self.auth
+        self.session.verify = False  # Disable SSL verification
         self.session.headers.update({
             'Accept': 'application/json',
             'Content-Type': 'application/json'
@@ -170,51 +176,60 @@ class JiraReleaseFetcher:
         
         return issue_data
     
-    def fetch_releases_and_issues(self, project_key: str, start_date: str, end_date: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    def fetch_releases_and_issues_multiple_projects(self, project_keys_str: str, start_date: str, end_date: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
-        Main method to fetch releases and associated issues
+        Main method to fetch releases and associated issues for multiple projects
         
         Args:
-            project_key: Jira project key
+            project_keys_str: Comma-separated string of project keys (e.g., "PROJ1,PROJ2,PROJ3")
             start_date: Start date in YYYY-MM-DD format
             end_date: End date in YYYY-MM-DD format
         
         Returns:
             Tuple of (releases_dataframe, issues_dataframe)
         """
-        logger.info(f"Fetching releases for project {project_key} between {start_date} and {end_date}")
+        # Parse project keys
+        project_keys = [key.strip() for key in project_keys_str.split(',') if key.strip()]
+        logger.info(f"Processing projects: {project_keys}")
         
-        # Get releases in date range
-        releases = self.get_releases_in_date_range(project_key, start_date, end_date)
-        
-        # Create releases dataframe
-        releases_data = []
+        all_releases_data = []
         all_issues_data = []
         
-        for release in releases:
-            # Prepare release data
-            release_data = {
-                'version': release.get('name', ''),
-                'status': 'Released' if release.get('released', False) else 'Unreleased',
-                'start_date': release.get('startDate', ''),
-                'release_date': release.get('releaseDate', ''),
-                'description': release.get('description', ''),
-                'project_key': project_key
-            }
-            releases_data.append(release_data)
+        for project_key in project_keys:
+            logger.info(f"Fetching releases for project {project_key} between {start_date} and {end_date}")
             
-            # Get issues for this release
-            issues = self.get_issues_for_version(project_key, release.get('name', ''))
-            
-            for issue in issues:
-                issue_data = self.extract_issue_data(issue)
-                issue_data['release_version'] = release.get('name', '')
-                issue_data['release_date'] = release.get('releaseDate', '')
-                issue_data['project_key'] = project_key
-                all_issues_data.append(issue_data)
+            try:
+                # Get releases in date range
+                releases = self.get_releases_in_date_range(project_key, start_date, end_date)
+                
+                for release in releases:
+                    # Prepare release data
+                    release_data = {
+                        'version': release.get('name', ''),
+                        'status': 'Released' if release.get('released', False) else 'Unreleased',
+                        'start_date': release.get('startDate', ''),
+                        'release_date': release.get('releaseDate', ''),
+                        'description': release.get('description', ''),
+                        'project_key': project_key
+                    }
+                    all_releases_data.append(release_data)
+                    
+                    # Get issues for this release
+                    issues = self.get_issues_for_version(project_key, release.get('name', ''))
+                    
+                    for issue in issues:
+                        issue_data = self.extract_issue_data(issue)
+                        issue_data['release_version'] = release.get('name', '')
+                        issue_data['release_date'] = release.get('releaseDate', '')
+                        issue_data['project_key'] = project_key
+                        all_issues_data.append(issue_data)
+                        
+            except Exception as e:
+                logger.error(f"Error processing project {project_key}: {e}")
+                continue
         
         # Create DataFrames
-        releases_df = pd.DataFrame(releases_data)
+        releases_df = pd.DataFrame(all_releases_data)
         issues_df = pd.DataFrame(all_issues_data)
         
         # Reorder columns for better readability
@@ -233,8 +248,113 @@ class JiraReleaseFetcher:
             existing_columns = [col for col in issues_columns if col in issues_df.columns]
             issues_df = issues_df[existing_columns]
         
-        logger.info(f"Created dataframes: {len(releases_df)} releases, {len(issues_df)} issues")
+        logger.info(f"Created dataframes: {len(releases_df)} releases, {len(issues_df)} issues across all projects")
         return releases_df, issues_df
+    
+    def export_to_excel(self, releases_df: pd.DataFrame, issues_df: pd.DataFrame, 
+                       project_keys_str: str, start_date: str, end_date: str) -> str:
+        """
+        Export dataframes to Excel file with proper naming convention
+        
+        Args:
+            releases_df: DataFrame containing release data
+            issues_df: DataFrame containing issues data
+            project_keys_str: Comma-separated project keys for filename
+            start_date: Start date for filename
+            end_date: End date for filename
+        
+        Returns:
+            Filename of the created Excel file
+        """
+        try:
+            # Create filename with proper naming convention
+            project_names = "_".join([key.strip() for key in project_keys_str.split(',') if key.strip()])
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            start_formatted = start_date.replace('-', '')
+            end_formatted = end_date.replace('-', '')
+            
+            filename = f"Jira_Releases_Issues_{project_names}_{start_formatted}_to_{end_formatted}_{timestamp}.xlsx"
+            
+            # Create Excel writer object
+            with pd.ExcelWriter(filename, engine='openpyxl') as writer:
+                # Write releases data to first sheet
+                if not releases_df.empty:
+                    releases_df.to_excel(writer, sheet_name='Releases', index=False)
+                    
+                    # Auto-adjust column widths for releases sheet
+                    worksheet = writer.sheets['Releases']
+                    for column in worksheet.columns:
+                        max_length = 0
+                        column_letter = column[0].column_letter
+                        for cell in column:
+                            try:
+                                if len(str(cell.value)) > max_length:
+                                    max_length = len(str(cell.value))
+                            except:
+                                pass
+                        adjusted_width = min(max_length + 2, 50)  # Max width of 50
+                        worksheet.column_dimensions[column_letter].width = adjusted_width
+                
+                # Write issues data to second sheet
+                if not issues_df.empty:
+                    issues_df.to_excel(writer, sheet_name='Issues', index=False)
+                    
+                    # Auto-adjust column widths for issues sheet
+                    worksheet = writer.sheets['Issues']
+                    for column in worksheet.columns:
+                        max_length = 0
+                        column_letter = column[0].column_letter
+                        for cell in column:
+                            try:
+                                if len(str(cell.value)) > max_length:
+                                    max_length = len(str(cell.value))
+                            except:
+                                pass
+                        adjusted_width = min(max_length + 2, 50)  # Max width of 50
+                        worksheet.column_dimensions[column_letter].width = adjusted_width
+                
+                # Create summary sheet
+                summary_data = {
+                    'Metric': [
+                        'Total Projects Processed',
+                        'Total Releases Found',
+                        'Total Issues Found',
+                        'Date Range Start',
+                        'Date Range End',
+                        'Export Timestamp'
+                    ],
+                    'Value': [
+                        len([key.strip() for key in project_keys_str.split(',') if key.strip()]),
+                        len(releases_df),
+                        len(issues_df),
+                        start_date,
+                        end_date,
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    ]
+                }
+                summary_df = pd.DataFrame(summary_data)
+                summary_df.to_excel(writer, sheet_name='Summary', index=False)
+                
+                # Auto-adjust column widths for summary sheet
+                worksheet = writer.sheets['Summary']
+                for column in worksheet.columns:
+                    max_length = 0
+                    column_letter = column[0].column_letter
+                    for cell in column:
+                        try:
+                            if len(str(cell.value)) > max_length:
+                                max_length = len(str(cell.value))
+                        except:
+                            pass
+                    adjusted_width = min(max_length + 2, 30)
+                    worksheet.column_dimensions[column_letter].width = adjusted_width
+            
+            logger.info(f"Data exported to Excel file: {filename}")
+            return filename
+            
+        except Exception as e:
+            logger.error(f"Error exporting to Excel: {e}")
+            raise
 
 def main():
     """
