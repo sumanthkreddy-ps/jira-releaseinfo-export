@@ -128,55 +128,6 @@ class JiraReleaseFetcher:
         
         return all_issues
     
-    def _extract_issue_data(self, issue, release):
-        """Extract relevant data from Jira issue"""
-        fields = issue.get('fields', {})
-        
-        # Extract basic fields
-        issue_data = {
-            'Project_Key': release['Project_Key'],
-            'Release_Version': release['Version'],
-            'Release_Date': release['Release_Date'],
-            'Priority': fields.get('priority', {}).get('name', '') if fields.get('priority') else '',
-            'Issue_Type': fields.get('issuetype', {}).get('name', '') if fields.get('issuetype') else '',
-            'Issue_Key': issue.get('key', ''),
-            'Summary': fields.get('summary', ''),
-            'Assignee': fields.get('assignee', {}).get('displayName', '') if fields.get('assignee') else '',
-            'Reporter': fields.get('reporter', {}).get('displayName', '') if fields.get('reporter') else '',
-            'Status': fields.get('status', {}).get('name', '') if fields.get('status') else '',
-            'Resolution': fields.get('resolution', {}).get('name', '') if fields.get('resolution') else '',
-            'Fix_Version': ', '.join([v.get('name', '') for v in fields.get('fixVersions', [])]),
-            'Labels': ', '.join(fields.get('labels', [])),
-            'Description': fields.get('description', ''),
-        }
-        
-        # Extract custom fields - Updated with your actual Jira field IDs
-        custom_fields = {
-            'SDLC_Information': self._get_custom_field_value(fields, ['customfield_15600']),  # SDLC Information
-            'Application_Name': self._get_custom_field_value(fields, ['customfield_11700']),  # Application Name
-            'Story_Points': self._get_custom_field_value(fields, ['customfield_10106']),      # Story Points
-            'Sprint': self._extract_sprint_info(fields),                                       # Sprint (customfield_10104)
-            'Acceptance_Criteria': self._get_custom_field_value(fields, ['customfield_10601']), # Acceptance Criteria
-            'Feature_Link': self._get_custom_field_value(fields, ['customfield_10100']),      # Feature Link
-            'Notes': self._get_custom_field_value(fields, ['customfield_10602'])              # Notes
-        }
-        
-        issue_data.update(custom_fields)
-        return issue_data
-    
-    def _get_custom_field_value(self, fields, possible_field_ids):
-        """Get value from custom fields by trying multiple possible field IDs"""
-        for field_id in possible_field_ids:
-            if field_id in fields and fields[field_id] is not None:
-                value = fields[field_id]
-                if isinstance(value, dict):
-                    return value.get('value', str(value))
-                elif isinstance(value, list):
-                    return ', '.join([str(item) for item in value])
-                else:
-                    return str(value)
-        return ''
-    
     def _debug_custom_fields(self, issue):
         """Debug function to print all available custom fields"""
         fields = issue.get('fields', {})
@@ -264,27 +215,184 @@ class JiraReleaseFetcher:
         except requests.exceptions.RequestException as e:
             print(f"Error fetching field mappings: {e}")
             return {}
-        """Extract sprint information from custom fields"""
-        sprint_fields = ['customfield_10020', 'customfield_10007', 'customfield_10105']
+    
+    def _extract_issue_data(self, issue, release):
+        """Extract relevant data from Jira issue"""
+        fields = issue.get('fields', {})
+        
+        # Extract basic fields
+        issue_data = {
+            'Project_Key': release['Project_Key'],
+            'Release_Version': release['Version'],
+            'Release_Date': release['Release_Date'],
+            'Priority': fields.get('priority', {}).get('name', '') if fields.get('priority') else '',
+            'Issue_Type': fields.get('issuetype', {}).get('name', '') if fields.get('issuetype') else '',
+            'Issue_Key': issue.get('key', ''),
+            'Summary': fields.get('summary', ''),
+            'Assignee': fields.get('assignee', {}).get('displayName', '') if fields.get('assignee') else '',
+            'Reporter': fields.get('reporter', {}).get('displayName', '') if fields.get('reporter') else '',
+            'Status': fields.get('status', {}).get('name', '') if fields.get('status') else '',
+            'Resolution': fields.get('resolution', {}).get('name', '') if fields.get('resolution') else '',
+            'Fix_Version': ', '.join([v.get('name', '') for v in fields.get('fixVersions', [])]),
+            'Labels': ', '.join(fields.get('labels', [])),
+            'Description': fields.get('description', ''),
+        }
+        
+        # Extract custom fields - Updated with your actual Jira field IDs
+        custom_fields = {
+            'SDLC_Information': self._get_custom_field_value(fields, ['customfield_15600']),  # SDLC Information
+            'Application_Name': self._get_custom_field_value(fields, ['customfield_11700']),  # Application Name
+            'Story_Points': self._get_custom_field_value(fields, ['customfield_10106']),      # Story Points
+            'Sprint': self._extract_sprint_info(fields),                                       # Sprint (customfield_10104)
+            'Acceptance_Criteria': self._get_custom_field_value(fields, ['customfield_10601']), # Acceptance Criteria
+            'Feature_Link': self._get_custom_field_value(fields, ['customfield_10100']),      # Feature Link
+            'Notes': self._get_custom_field_value(fields, ['customfield_10602'])              # Notes
+        }
+        
+        issue_data.update(custom_fields)
+        return issue_data
+    
+    def _get_custom_field_value(self, fields, possible_field_ids):
+        """Get value from custom fields by trying multiple possible field IDs"""
+        for field_id in possible_field_ids:
+            if field_id in fields and fields[field_id] is not None:
+                value = fields[field_id]
+                if isinstance(value, dict):
+                    return value.get('value', str(value))
+                elif isinstance(value, list):
+                    return ', '.join([str(item) for item in value])
+                else:
+                    return str(value)
+        return ''
+    
+    def _extract_sprint_info(self, fields, debug_sprint=False):
+        """
+        Extract sprint information from custom fields - Updated for your Jira
+        
+        Args:
+            fields (dict): Issue fields from Jira API
+            debug_sprint (bool): If True, prints detailed sprint debugging info
+            
+        Returns:
+            str: Sprint name or sprint details
+        """
+        # Your specific sprint field ID
+        sprint_fields = ['customfield_10104']  # Sprint field from your Jira
+        
+        if debug_sprint:
+            print(f"\n{'='*50}")
+            print("DEBUG: SPRINT FIELD ANALYSIS")
+            print(f"{'='*50}")
+            
+            # Check sprint field
+            for field_id in sprint_fields:
+                if field_id in fields:
+                    field_value = fields[field_id]
+                    print(f"\nField ID: {field_id} (Sprint)")
+                    print(f"Type: {type(field_value).__name__}")
+                    print(f"Value: {str(field_value)[:200]}...")
+                    if hasattr(field_value, '__len__') and not isinstance(field_value, str):
+                        print(f"Length: {len(field_value)}")
+            print(f"{'='*50}\n")
+        
+        sprint_info = []
         
         for field_id in sprint_fields:
-            if field_id in fields and fields[field_id]:
+            if field_id in fields and fields[field_id] is not None:
                 sprint_data = fields[field_id]
-                if isinstance(sprint_data, list) and sprint_data:
-                    # Get the latest sprint
-                    latest_sprint = sprint_data[-1]
-                    if isinstance(latest_sprint, str):
-                        # Parse sprint string format
-                        if 'name=' in latest_sprint:
-                            start = latest_sprint.find('name=') + 5
-                            end = latest_sprint.find(',', start)
-                            if end == -1:
-                                end = latest_sprint.find(']', start)
-                            return latest_sprint[start:end] if end > start else latest_sprint
-                    elif isinstance(latest_sprint, dict):
-                        return latest_sprint.get('name', str(latest_sprint))
+                
+                if debug_sprint:
+                    print(f"Processing field {field_id}: {type(sprint_data).__name__}")
+                
+                if isinstance(sprint_data, list):
+                    # Sprint data is usually an array of sprint objects
+                    for sprint in sprint_data:
+                        sprint_name = self._parse_single_sprint(sprint, debug_sprint)
+                        if sprint_name:
+                            sprint_info.append(sprint_name)
+                
+                elif isinstance(sprint_data, dict):
+                    # Single sprint object
+                    sprint_name = self._parse_single_sprint(sprint_data, debug_sprint)
+                    if sprint_name:
+                        sprint_info.append(sprint_name)
+                
                 elif isinstance(sprint_data, str):
-                    return sprint_data
+                    # String representation of sprint
+                    sprint_name = self._parse_single_sprint(sprint_data, debug_sprint)
+                    if sprint_name:
+                        sprint_info.append(sprint_name)
+        
+        result = ', '.join(sprint_info) if sprint_info else ''
+        
+        if debug_sprint:
+            print(f"Final sprint result: '{result}'\n")
+        
+        return result
+    
+    def _parse_single_sprint(self, sprint_data, debug=False):
+        """
+        Parse individual sprint data from various formats
+        
+        Args:
+            sprint_data: Sprint data in various formats (dict, string, etc.)
+            debug (bool): Enable debug output
+            
+        Returns:
+            str: Parsed sprint name or info
+        """
+        if debug:
+            print(f"  Parsing sprint: {type(sprint_data).__name__} = {str(sprint_data)[:100]}...")
+        
+        if isinstance(sprint_data, dict):
+            # Sprint as dictionary object
+            name = sprint_data.get('name', '')
+            state = sprint_data.get('state', '')
+            sprint_id = sprint_data.get('id', '')
+            
+            if name:
+                result = f"{name}"
+                if state and state != 'CLOSED':
+                    result += f" ({state})"
+                return result
+            elif sprint_id:
+                return f"Sprint {sprint_id}"
+        
+        elif isinstance(sprint_data, str):
+            # Parse string format sprint data
+            # Format usually like: "com.atlassian.greenhopper.service.sprint.Sprint@hash[id=123,name=Sprint 1,state=ACTIVE,...]"
+            
+            if 'name=' in sprint_data:
+                # Extract name from string format
+                try:
+                    name_start = sprint_data.find('name=') + 5
+                    name_end = sprint_data.find(',', name_start)
+                    if name_end == -1:
+                        name_end = sprint_data.find(']', name_start)
+                    
+                    if name_end > name_start:
+                        name = sprint_data[name_start:name_end]
+                        
+                        # Also try to extract state
+                        if 'state=' in sprint_data:
+                            state_start = sprint_data.find('state=') + 6
+                            state_end = sprint_data.find(',', state_start)
+                            if state_end == -1:
+                                state_end = sprint_data.find(']', state_start)
+                            
+                            if state_end > state_start:
+                                state = sprint_data[state_start:state_end]
+                                if state != 'CLOSED':
+                                    return f"{name} ({state})"
+                        
+                        return name
+                except:
+                    pass
+            
+            # If it's just a simple string, return as-is (after cleaning)
+            if not sprint_data.startswith('com.atlassian'):
+                return sprint_data.strip()
+        
         return ''
     
     def create_dataframes(self, releases, issues):
@@ -331,39 +439,7 @@ class JiraReleaseFetcher:
             print(f"Error exporting to Excel: {e}")
             return None
 
-def debug_sprint_info():
-    """
-    Standalone function to debug sprint information for a specific issue
-    Use this to identify sprint field IDs before running the main script
-    """
-    # Configuration - update these with your details
-    JIRA_URL = "https://your-jira-instance.com"  # Replace with your Jira URL
-    USERNAME = "your-username"  # Replace with your username
-    PASSWORD = "your-password"  # Replace with your password
-    TEST_ISSUE_KEY = "PROJ-123"  # Replace with an actual issue key that has sprint info
-    
-    # Initialize Jira fetcher
-    jira_fetcher = JiraReleaseFetcher(JIRA_URL, USERNAME, PASSWORD)
-    
-    print("🔍 DEBUGGING SPRINT INFORMATION")
-    print("="*50)
-    print(f"Testing with issue: {TEST_ISSUE_KEY}")
-    print("Make sure this issue has sprint information!")
-    print("="*50)
-    
-    # Debug sprint fields for the specific issue
-    sprint_candidates = jira_fetcher.debug_sprint_fields_for_issue(TEST_ISSUE_KEY)
-    
-    if sprint_candidates:
-        print("\n✅ RECOMMENDED SPRINT FIELD IDs TO USE:")
-        print("-" * 40)
-        for field_id, field_name, field_value in sprint_candidates:
-            print(f"Field ID: {field_id}")
-            print(f"Field Name: {field_name}")
-            print(f"Recommended for: _extract_sprint_info() function")
-            print()
-    
-    return sprint_candidates
+def main():
     """
     Main function to execute the Jira data fetching process
     """
@@ -403,6 +479,10 @@ def debug_sprint_info():
         # Get field mappings to identify correct custom field IDs
         print("\nFetching field mappings...")
         field_mappings = jira_fetcher.get_field_mappings()
+        
+        if not releases:
+            print("No releases found for the specified criteria.")
+            return
         
         # Create DataFrames
         print("\nCreating DataFrames...")
